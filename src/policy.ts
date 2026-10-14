@@ -43,41 +43,75 @@ export interface CommandPattern {
  * `safeCommands` setting, where the choice is explicit and local.
  */
 export const SAFE_COMMANDS: readonly string[] = [
+  // Shell state and navigation
   "pwd",
-  "cd",
-  "ls",
+  "cd*",
+  "ls*",
+  "tree*",
   "whoami",
   "hostname",
-  "uname",
+  "uname*",
   "date",
-  "cat",
-  "head",
-  "tail",
-  "wc",
-  "basename",
-  "dirname",
-  "du",
-  "df",
-  "node --version",
-  "npm --version",
-  "python --version",
-  "python3 --version",
-  "uv --version",
-  "go version",
-  "cargo --version",
-  "gh --version",
-  "git status",
+  // Reading files and stdin. Shell redirection and pipes are rejected by the matcher,
+  // and a credential path is caught by the dangerous patterns before this list, so
+  // `cat*` cannot read a secret out of the gate's sight.
+  "cat*",
+  "bat*",
+  "head*",
+  "tail*",
+  "less*",
+  "wc*",
+  "file*",
+  "stat*",
+  "realpath*",
+  "readlink*",
+  "basename*",
+  "dirname*",
+  "du*",
+  "df*",
+  // `find -delete` and `find -exec` are judged before the read-only fast path.
+  "find*",
+  // Searching and transforming text without writing files
+  "grep*",
+  "rg*",
+  "ag*",
+  "jq*",
+  "diff*",
+  "cmp*",
+  "sort*",
+  "uniq*",
+  "cut*",
+  "column*",
+  "nl*",
+  "xxd*",
+  // Interpreter and tool versions
+  "node --version*",
+  "npm --version*",
+  "python --version*",
+  "python3 --version*",
+  "uv --version*",
+  "go version*",
+  "cargo --version*",
+  "gh --version*",
+  // Git inspection. Destructive variants (`tag -d`, `branch -D`, `clean -f`,
+  // `push --force`) match dangerous patterns and are judged before this list.
+  "git status*",
+  "git diff*",
+  "git log*",
+  "git show*",
   "git branch",
   "git remote",
   "git remote -v",
-  "git worktree list",
-  "git stash list",
+  "git blame*",
+  "git shortlog*",
+  "git describe*",
+  "git rev-parse*",
+  "git ls-files*",
+  "git ls-tree*",
+  "git worktree list*",
+  "git stash list*",
   "git tag",
 ];
-
-const SAFE_COMMANDS_WITH_ARGUMENTS = new Set([
-  "cd", "ls", "uname", "cat", "head", "tail", "wc", "basename", "dirname", "du", "df", "git status",
-]);
 
 /**
  * Shell control syntax. An allow pattern that matches through `;`, `&&`, `|`,
@@ -147,6 +181,13 @@ const DANGEROUS_PATTERNS: readonly CommandPattern[] = [
   { name: "remove Git metadata", pattern: /\brm\b[^\n;&|]*\s(?:\.git|\.git\/|['"]\.git['"])/i },
   { name: "find delete", pattern: /\bfind\b[^\n;&|]*\s-delete\b/i },
   { name: "xargs rm", pattern: /\bxargs\b[^\n;&|]*\brm\b/i },
+
+  // Read-only tools with options that write files or execute helper programs
+  { name: "find command execution", pattern: /\bfind\b[^\n;&|]*\s["']?-(?:exec|execdir|ok|okdir)(?=\s|=|["']|$)/i },
+  { name: "sort output file", pattern: /\bsort\b[^\n;&|]*\s["']?(?:-o\S*|--output(?:=|\s|["']|$))/i },
+  { name: "git diff helper or output file", pattern: /\bgit\s+(?:diff|log|show)\b[^\n;&|]*\s["']?(?:--output(?:=|\s|["']|$)|--ext-diff\b|--textconv\b)/i },
+  { name: "ripgrep preprocessor", pattern: /\brg\b[^\n;&|]*\s["']?--pre(?:=|\s|["']|$)/i },
+  { name: "xxd reverse output", pattern: /\bxxd\b[^\n;&|]*\s["']?-[^\s;&|"']*r/i },
 
   // Package execution and publishing can run third-party code or change remote state
   {
@@ -355,12 +396,19 @@ export function isScopedLocalDeletionCommand(command: string, cwd: string): bool
 }
 
 /** Read-only built-ins only: the commands the gate can vouch for on its own. */
-export function isReadOnlyCommand(command: string): boolean {
-  if (SHELL_CONTROL_CHARACTERS.test(command)) return false;
+export function isReadOnlyCommand(command: string, cwd?: string): boolean {
+  if (SHELL_CONTROL_CHARACTERS.test(command) || dangerousReasons(command, cwd).length > 0) return false;
+
   const normalized = command.trim();
-  return SAFE_COMMANDS.some((safe) =>
-    normalized === safe || (SAFE_COMMANDS_WITH_ARGUMENTS.has(safe) && normalized.startsWith(`${safe} `)),
-  );
+  return SAFE_COMMANDS.some((pattern) => {
+    const wildcardIndex = pattern.search(/[?*]/);
+    if (wildcardIndex !== -1) {
+      const prefix = pattern.slice(0, wildcardIndex);
+      const next = normalized[prefix.length];
+      if (!normalized.startsWith(prefix) || (next !== undefined && !/\s/.test(next))) return false;
+    }
+    return matchesCommandPattern(normalized, pattern, false);
+  });
 }
 
 /**
@@ -372,13 +420,13 @@ export function isReadOnlyCommand(command: string): boolean {
  * (not on the list) and `sh` (not on the list), so it is still judged, and a
  * segment containing a redirection fails the matcher anyway.
  */
-export function isReadOnlyCommandChain(command: string): boolean {
+export function isReadOnlyCommandChain(command: string, cwd?: string): boolean {
   const segments = command
     .split(/&&|\|\||;|\||\n/)
     .map((segment) => segment.trim())
     .filter((segment) => segment.length > 0);
   if (segments.length === 0) return false;
-  return segments.every((segment) => isReadOnlyCommand(segment));
+  return segments.every((segment) => isReadOnlyCommand(segment, cwd));
 }
 
 /**

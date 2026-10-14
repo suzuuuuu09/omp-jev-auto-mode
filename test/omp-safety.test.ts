@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 
 import { DEFAULT_SETTINGS, JevAutoModeStore } from "../src/settings.ts";
 import { buildConfirmationDialog } from "../src/ui.ts";
-import { hardDenyReasons, protectedPathReason, isReadOnlyCommandChain } from "../src/policy.ts";
+import { dangerousReasons, hardDenyReasons, isReadOnlyCommandChain, protectedPathReason } from "../src/policy.ts";
 
 test("uncertain calls require user confirmation by default", () => {
   assert.equal(DEFAULT_SETTINGS.uncertain, "ask");
@@ -21,9 +21,12 @@ test("OMP extension files are protected", () => {
   assert.ok(protectedPathReason("/home/suzu/.omp/agent/extensions/test.ts"));
 });
 
-test("read-only command chains use the fast path", () => {
-  assert.equal(isReadOnlyCommandChain("git status && ls src"), true);
+test("ordinary search and Git inspection stay on the fast path", () => {
+  for (const command of ["rg foo src", "git diff", "git log -5", "git show HEAD"]) {
+    assert.equal(isReadOnlyCommandChain(command), true, command);
+  }
   assert.equal(isReadOnlyCommandChain("git status && rm -rf build"), false);
+  assert.equal(isReadOnlyCommandChain("find build -type f -delete", "/tmp/repo"), true);
 });
 
 test("confirmation dialogs show only the essentials", () => {
@@ -69,7 +72,12 @@ test("commands that can write or execute code require judgment", () => {
     "rg --pre=sh pattern input.txt",
     "xxd -r input.hex /tmp/result.bin",
     "lsfoo",
+    "rg '--pre=sh' pattern input.txt",
+    "sort -o/tmp/result.txt input.txt",
+    "xxd -re input.hex /tmp/result.bin",
   ]) {
     assert.equal(isReadOnlyCommandChain(command), false, command);
+    if (!command.includes("lsfoo")) assert.ok(dangerousReasons(command).length > 0, command);
   }
+  assert.equal(isReadOnlyCommandChain("lsfoo"), false);
 });

@@ -247,7 +247,7 @@ export async function evaluateToolCall(
     const matchedReasons = dangerousReasons(command, ctx.cwd);
     if (matchedReasons.length > 0) {
       reasons = matchedReasons;
-    } else if (isReadOnlyCommandChain(command)) {
+    } else if (isReadOnlyCommandChain(command, ctx.cwd)) {
       return undefined;
     } else if (state.settings.gateScope === "matched") {
       return undefined;

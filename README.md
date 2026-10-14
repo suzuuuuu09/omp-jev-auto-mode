@@ -12,7 +12,7 @@ An experimental Jev-powered tool-call guard for [Oh My Pi](https://github.com/ca
 - Protects `.omp` and `.herdr` paths in addition to upstream protected paths.
 - Ignores project-local Jev settings: OMP currently treats all projects as trusted, so allowing project overrides could disable the global gate.
 - Short confirmation dialog, and audit records stored in session metadata.
-- Commands with write or execution options (`find`, `sort`, `rg`, `xxd`, Git diff/log/show, and similar tools) go through Jev rather than the built-in read-only fast path. Explicit user safe-command patterns still take precedence.
+- Ordinary read-only searches and Git inspection stay on the fast path. Write or execution options such as `find -exec`, `sort -o`, `rg --pre`, `xxd -r`, and Git diff output or helper options go through Jev. Explicit user safe-command patterns still take precedence.
 - Jev sees the complete redacted command. Requests exceeding the configured character budget are blocked before sending.
 - Upstream display settings and project-setting APIs are removed. Existing global files still load; legacy `display` fields are ignored.
 
