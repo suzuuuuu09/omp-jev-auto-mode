@@ -54,10 +54,9 @@ export interface ConfirmationParts {
 
 /** The dialog shown when a judgment is delegated to the user. */
 export function buildConfirmationDialog(parts: ConfirmationParts): string {
-  const command = parts.command?.split("\n")[0]?.trim() ?? parts.path ?? parts.tool;
-  const preview = command.length > 90 ? `${command.slice(0, 90)}…` : command;
+  const command = parts.command ?? parts.path ?? parts.tool;
   const reason = parts.reasons[0] ?? "Jev is uncertain";
-  return [`Confirm: ${parts.tool}`, preview, `Reason: ${reason}`].join("\n");
+  return [`Confirm: ${parts.tool}`, command, `Reason: ${reason}`].join("\n");
 }
 
 export const USAGE_TEXT = [
@@ -131,7 +130,7 @@ export function formatRuleTable(
   overrides: Readonly<Record<string, number>> = {},
   observed: ReadonlyMap<string, ObservedCondition> = new Map(),
 ): string {
-  const header = `${pad("rule", 28)}${pad("mode", 10)}${pad("severity", 10)}${pad("threshold", 30)}last observed`;
+  const header = `${pad("rule", 28)}${pad("mode", 10)}${pad("severity", 14)}${pad("threshold", 30)}last observed`;
   const rows = rules.map((rule) => {
     const override = overrides[rule.id];
     const threshold = override ?? rule.threshold;
@@ -139,7 +138,7 @@ export function formatRuleTable(
     // Recompute against the effective rule, not the default one: the point of the
     // last-observed column is to answer "what would this answer mean now".
     const effective = override === undefined ? rule : { ...rule, threshold: override };
-    return `${pad(rule.id, 28)}${pad(rule.mode, 10)}${pad(rule.severity, 10)}${pad(`${formatThreshold(threshold)} ${origin}`, 30)}${describeLast(effective, observed.get(rule.id))}`;
+    return `${pad(rule.id, 28)}${pad(rule.mode, 10)}${pad(rule.severity, 14)}${pad(`${formatThreshold(threshold)} ${origin}`, 30)}${describeLast(effective, observed.get(rule.id))}`;
   });
 
   const unknown = Object.keys(overrides).filter((ruleId) => !rules.some((rule) => rule.id === ruleId));

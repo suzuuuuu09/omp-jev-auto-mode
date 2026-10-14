@@ -13,6 +13,7 @@ export interface DecisionRecord {
   readonly rationale: string;
   readonly conditions?: readonly ConditionReport[];
   readonly decidingRule?: string;
+  readonly requiresConfirmation?: boolean;
   readonly clearedByIntent?: readonly string[];
   readonly probabilities?: Readonly<Record<string, number>>;
   readonly model?: string;

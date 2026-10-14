@@ -143,6 +143,7 @@ export function createJevEngine(options: JevEngineOptions): DecisionEngine {
       });
 
       const evidence = {
+        ...(combined.requiresConfirmation ? { requiresConfirmation: true } : {}),
         probabilities: combined.probabilities,
         thresholds,
         conditions,

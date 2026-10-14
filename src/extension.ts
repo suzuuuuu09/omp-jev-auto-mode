@@ -164,6 +164,7 @@ function writeRecord(deps: DecisionDeps, input: RecordInput): void {
     source: input.source,
     rationale: input.rationale,
     ...(input.evidence?.conditions ? { conditions: input.evidence.conditions } : {}),
+    ...(input.evidence?.requiresConfirmation ? { requiresConfirmation: true } : {}),
     ...(input.evidence?.decidingRule ? { decidingRule: input.evidence.decidingRule } : {}),
     ...(input.evidence?.clearedByIntent ? { clearedByIntent: input.evidence.clearedByIntent } : {}),
     ...(input.evidence?.probabilities ? { probabilities: input.evidence.probabilities } : {}),
@@ -317,6 +318,7 @@ export async function evaluateToolCall(
     ...(verdict.probabilities ? { probabilities: verdict.probabilities } : {}),
     ...(verdict.thresholds ? { thresholds: verdict.thresholds } : {}),
     ...(verdict.conditions ? { conditions: verdict.conditions } : {}),
+    ...(verdict.requiresConfirmation ? { requiresConfirmation: true } : {}),
     ...(verdict.decidingRule ? { decidingRule: verdict.decidingRule } : {}),
     ...(verdict.clearedByIntent ? { clearedByIntent: verdict.clearedByIntent } : {}),
     ...(verdict.model ? { model: verdict.model } : {}),
@@ -351,7 +353,11 @@ export async function evaluateToolCall(
     }
 
     case "uncertain": {
-      if (state.settings.uncertain === "deny") {
+      const independentUncertainty = verdict.conditions?.some(
+        (condition) => condition.verdict === "uncertain" && condition.ruleId !== "intent_coverage",
+      );
+
+      if (state.settings.uncertain === "deny" && (!verdict.requiresConfirmation || independentUncertainty)) {
         const rationale = `No condition decided the call, and the uncertain band is resolved to a block. ${verdict.rationale}`;
         return blocked(deps, {
           call,
@@ -363,7 +369,7 @@ export async function evaluateToolCall(
         });
       }
 
-      if (state.settings.uncertain === "allow") {
+      if (state.settings.uncertain === "allow" && !verdict.requiresConfirmation) {
         return permit(deps, {
           call,
           reasons,
@@ -387,7 +393,7 @@ export async function evaluateToolCall(
         tool: call.tool,
         ...(call.command === undefined ? {} : { command: call.command }),
         ...(call.path === undefined ? {} : { path: call.path }),
-        reasons,
+        reasons: [verdict.rationale, ...reasons],
       });
 
       const choice = await ctx.ui.select(dialog, ["No", "Yes"]);

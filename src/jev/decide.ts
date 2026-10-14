@@ -74,6 +74,7 @@ export interface CombinedDecision {
   readonly decidingRule: string | undefined;
   /** Rules whose clear rejection was cleared by the user's own request. */
   readonly clearedByIntent: readonly string[];
+  readonly requiresConfirmation?: boolean;
 }
 
 const INTENT_RULE_ID = "intent_coverage";
@@ -106,7 +107,8 @@ function describe(rules: readonly JevRule[], observation: Observation): string {
  * 2. A rejected `soft` rule is cleared when the intent condition is satisfied —
  *    the user's own words are the authority for actions they are entitled to
  *    request, and the deterministic layer already holds the non-negotiable line.
- * 3. An unclear `required` condition escalates to a confirmation.
+ * 3. Unrecoverable loss or unclear intent requires explicit confirmation.
+ *    Other unclear `required` conditions follow the configured uncertainty policy.
  * 4. Otherwise the call is approved.
  */
 export function combine(rules: readonly JevRule[], observations: readonly Observation[]): CombinedDecision {
@@ -131,26 +133,47 @@ export function combine(rules: readonly JevRule[], observations: readonly Observ
   }
 
   const intentSatisfied = observations.some(
-    (observation) => observation.ruleId === INTENT_RULE_ID && observation.effective === "satisfied",
+    (observation) => observation.ruleId === INTENT_RULE_ID && observation.verdict === "satisfied",
   );
 
   const soft = rejected.filter((observation) => severityOf(observation) === "soft");
-  if (soft.length > 0) {
-    const first = soft[0] as Observation;
-    const rule = rules.find((candidate) => candidate.id === first.ruleId);
-    if (!intentSatisfied) {
-      return {
-        verdict: "deny",
-        rationale: `${rule?.denyMessage ?? "A safety condition was clearly violated."} ${describe(rules, first)}`,
-        probabilities,
-        decidingRule: first.ruleId,
-        clearedByIntent: [],
-      };
-    }
+  const confirmation = rejected.find((observation) => severityOf(observation) === "confirmation");
+  const uncertainIntent = observations.find(
+    (observation) => observation.ruleId === INTENT_RULE_ID && observation.verdict === "uncertain",
+  );
+  const firstUncertain = observations.find(
+    (observation) => observation.effective === "uncertain" && observation.ruleId !== INTENT_RULE_ID,
+  );
+  const needsConfirmation = confirmation ?? uncertainIntent;
+  if (needsConfirmation) {
+    const rule = rules.find((candidate) => candidate.id === needsConfirmation.ruleId);
+    const message = confirmation ? rule?.denyMessage : rule?.uncertainMessage;
+    const uncertainRule = firstUncertain && rules.find((candidate) => candidate.id === firstUncertain.ruleId);
+    const independentReason = firstUncertain
+      ? ` ${uncertainRule?.uncertainMessage ?? "A safety condition could not be decided."} ${describe(rules, firstUncertain)}`
+      : "";
+    return {
+      verdict: "uncertain",
+      rationale: `${message ?? "A safety condition needs confirmation."} ${describe(rules, needsConfirmation)}${independentReason}`,
+      probabilities,
+      decidingRule: needsConfirmation.ruleId,
+      clearedByIntent: intentSatisfied ? soft.map((observation) => observation.ruleId) : [],
+      requiresConfirmation: true,
+    };
   }
 
-  const uncertain = observations.filter((observation) => observation.effective === "uncertain");
-  const firstUncertain = uncertain[0];
+  if (soft.length > 0 && !intentSatisfied) {
+    const first = soft[0] as Observation;
+    const rule = rules.find((candidate) => candidate.id === first.ruleId);
+    return {
+      verdict: "deny",
+      rationale: `${rule?.denyMessage ?? "A safety condition was clearly violated."} ${describe(rules, first)}`,
+      probabilities,
+      decidingRule: first.ruleId,
+      clearedByIntent: [],
+    };
+  }
+
   if (firstUncertain) {
     const rule = rules.find((candidate) => candidate.id === firstUncertain.ruleId);
     return {

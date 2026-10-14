@@ -40,6 +40,8 @@ export interface EngineEvidence {
   readonly clearedByIntent?: readonly string[];
   readonly model?: string;
   readonly latencyMs?: number;
+  /** Confirmation cannot be bypassed by the uncertainty policy. */
+  readonly requiresConfirmation?: boolean;
 }
 
 export type EngineVerdict =
@@ -54,8 +56,7 @@ export interface CandidateInput {
   readonly reasons: readonly string[];
   /**
    * Whether the deterministic layer recognised the call as a dangerous shape.
-   * Required rather than optional: a caller that forgets it would silently skip the
-   * intent question, which is the wrong direction to fail in.
+   * Used to filter rules scoped to recognised dangerous shapes.
    */
   readonly flagged: boolean;
   readonly intent: string;
