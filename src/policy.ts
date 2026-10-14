@@ -396,8 +396,8 @@ export function isScopedLocalDeletionCommand(command: string, cwd: string): bool
 }
 
 /** Read-only built-ins only: the commands the gate can vouch for on its own. */
-export function isReadOnlyCommand(command: string, cwd?: string): boolean {
-  if (SHELL_CONTROL_CHARACTERS.test(command) || dangerousReasons(command, cwd).length > 0) return false;
+export function isReadOnlyCommand(command: string): boolean {
+  if (SHELL_CONTROL_CHARACTERS.test(command) || dangerousReasons(command).length > 0) return false;
 
   const normalized = command.trim();
   return SAFE_COMMANDS.some((pattern) => {
@@ -420,13 +420,13 @@ export function isReadOnlyCommand(command: string, cwd?: string): boolean {
  * (not on the list) and `sh` (not on the list), so it is still judged, and a
  * segment containing a redirection fails the matcher anyway.
  */
-export function isReadOnlyCommandChain(command: string, cwd?: string): boolean {
+export function isReadOnlyCommandChain(command: string): boolean {
   const segments = command
     .split(/&&|\|\||;|\||\n/)
     .map((segment) => segment.trim())
     .filter((segment) => segment.length > 0);
   if (segments.length === 0) return false;
-  return segments.every((segment) => isReadOnlyCommand(segment, cwd));
+  return segments.every((segment) => isReadOnlyCommand(segment));
 }
 
 /**

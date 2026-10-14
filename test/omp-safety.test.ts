@@ -4,9 +4,21 @@ import { join } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import {
+  createInitialState,
+  evaluateToolCall,
+  type DecisionDeps,
+  type GateContext,
+} from "../src/extension.ts";
 import { DEFAULT_SETTINGS, JevAutoModeStore } from "../src/settings.ts";
 import { buildConfirmationDialog } from "../src/ui.ts";
-import { dangerousReasons, hardDenyReasons, isReadOnlyCommandChain, protectedPathReason } from "../src/policy.ts";
+import {
+  dangerousReasons,
+  hardDenyReasons,
+  isReadOnlyCommandChain,
+  isScopedLocalDeletionCommand,
+  protectedPathReason,
+} from "../src/policy.ts";
 
 test("uncertain calls require user confirmation by default", () => {
   assert.equal(DEFAULT_SETTINGS.uncertain, "ask");
@@ -26,7 +38,10 @@ test("ordinary search and Git inspection stay on the fast path", () => {
     assert.equal(isReadOnlyCommandChain(command), true, command);
   }
   assert.equal(isReadOnlyCommandChain("git status && rm -rf build"), false);
-  assert.equal(isReadOnlyCommandChain("find build -type f -delete", "/tmp/repo"), true);
+  const deletion = "find build -type f -delete";
+  assert.equal(isReadOnlyCommandChain(deletion), false);
+  assert.equal(isScopedLocalDeletionCommand(deletion, "/tmp/repo"), true);
+  assert.equal(isScopedLocalDeletionCommand("find . -delete", "/tmp/repo"), false);
 });
 
 test("confirmation dialogs show only the essentials", () => {
@@ -80,4 +95,48 @@ test("commands that can write or execute code require judgment", () => {
     if (!command.includes("lsfoo")) assert.ok(dangerousReasons(command).length > 0, command);
   }
   assert.equal(isReadOnlyCommandChain("lsfoo"), false);
+});
+
+test("only explicitly scoped local deletions skip Jev judgment", async () => {
+  const context: GateContext = {
+    cwd: "/tmp/omp-workspace",
+    hasUI: true,
+    sessionManager: { getBranch: () => [] },
+    ui: {
+      notify: () => {},
+      select: async () => undefined,
+      confirm: async () => false,
+      input: async () => undefined,
+      editor: async () => undefined,
+      setStatus: () => {},
+    },
+  };
+  let judgments = 0;
+  const deps: DecisionDeps = {
+    engine: {
+      id: "test",
+      judge: async () => {
+        judgments += 1;
+        return { verdict: "allow", rationale: "test" };
+      },
+    },
+    record: () => {},
+    now: Date.now,
+  };
+
+  await evaluateToolCall(
+    { toolName: "bash", input: { command: "find build -type f -delete" } },
+    context,
+    createInitialState(),
+    deps,
+  );
+  assert.equal(judgments, 0);
+
+  await evaluateToolCall(
+    { toolName: "bash", input: { command: "find . -delete" } },
+    context,
+    createInitialState(),
+    deps,
+  );
+  assert.equal(judgments, 1);
 });

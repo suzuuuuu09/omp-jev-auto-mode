@@ -38,6 +38,7 @@ import {
   evaluateUserCommandRules,
   hardDenyReasons,
   isReadOnlyCommandChain,
+  isScopedLocalDeletionCommand,
   isUserDeclaredSafeCommand,
   PROTECTED_DIRECTORY_SEGMENTS,
   unique,
@@ -247,7 +248,9 @@ export async function evaluateToolCall(
     const matchedReasons = dangerousReasons(command, ctx.cwd);
     if (matchedReasons.length > 0) {
       reasons = matchedReasons;
-    } else if (isReadOnlyCommandChain(command, ctx.cwd)) {
+    } else if (isReadOnlyCommandChain(command)) {
+      return undefined;
+    } else if (isScopedLocalDeletionCommand(command, ctx.cwd)) {
       return undefined;
     } else if (state.settings.gateScope === "matched") {
       return undefined;
