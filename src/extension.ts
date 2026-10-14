@@ -540,8 +540,9 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
   };
 
   const refresh = async (ctx: GateContext, applyFlag: boolean): Promise<void> => {
-    const trusted = ctx.isProjectTrusted?.() ?? false;
-    const loadedSettings = await store.loadSettings(ctx.cwd, trusted);
+    // OMP's isProjectTrusted() currently always returns true, even in unknown
+    // checkouts. Never let a repository-owned config weaken this global gate.
+    const loadedSettings = await store.loadSettings(ctx.cwd, false);
     state.settings = loadedSettings.settings;
     state.scope = loadedSettings.scope;
     state.policyNotes = await store.loadPolicyNotes();
