@@ -10,6 +10,7 @@ An experimental Jev-powered tool-call guard for [Oh My Pi](https://github.com/ca
 - `uncertain: ask` by default; without a UI or when Jev cannot decide, escalated operations are blocked.
 - Blocks the `eval` tool while the extension is enabled: eval can invoke shell commands outside the bash guard.
 - Protects `.omp` and `.herdr` paths in addition to upstream protected paths.
+- Ignores project-local Jev settings: OMP currently treats all projects as trusted, so allowing project overrides could disable the global gate.
 - Short confirmation dialog, and audit records stored in session metadata.
 
 ## Local development
