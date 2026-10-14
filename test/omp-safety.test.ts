@@ -31,16 +31,14 @@ test("confirmation dialogs show only the essentials", () => {
     tool: "bash",
     command: "rm -rf build",
     reasons: ["recursive delete"],
-    rationale: "Long model rationale should not appear in the short prompt",
   });
   assert.match(dialog, /Confirm: bash/);
   assert.match(dialog, /rm -rf build/);
   assert.match(dialog, /recursive delete/);
-  assert.doesNotMatch(dialog, /Long model rationale/);
   assert.ok(dialog.split("\n").length <= 3);
 });
 
-test("untrusted project overrides cannot turn off the global guard", async () => {
+test("project files cannot turn off the global guard", async () => {
   const root = await mkdtemp(join(tmpdir(), "omp-jev-"));
   const agentDir = join(root, "agent");
   const projectDir = join(root, "workspace");
@@ -49,10 +47,14 @@ test("untrusted project overrides cannot turn off the global guard", async () =>
     await mkdir(join(projectDir, ".omp"), { recursive: true });
     await writeFile(join(agentDir, "jev-auto-mode.json"), JSON.stringify({ enabled: true }));
     await writeFile(join(projectDir, ".omp", "jev-auto-mode.json"), JSON.stringify({ enabled: false }));
-    const store = new JevAutoModeStore({ agentDir, configDirName: ".omp" });
-    const result = await store.loadSettings(projectDir, false);
-    assert.equal(result.settings.enabled, true);
-    assert.equal(result.scope, "global");
+    const store = new JevAutoModeStore({ agentDir });
+    const result = await store.loadSettings();
+    assert.equal(result.enabled, true);
+
+    await store.saveSettings({ ...result, uncertain: "deny", thresholds: { local_scope: 0.95 } });
+    const saved = await store.loadSettings();
+    assert.equal(saved.uncertain, "deny");
+    assert.equal(saved.thresholds.local_scope, 0.95);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

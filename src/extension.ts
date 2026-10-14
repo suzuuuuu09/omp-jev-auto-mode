@@ -15,7 +15,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { CONFIG_DIR_NAME, getAgentDir } from "@oh-my-pi/pi-utils";
+import { getAgentDir } from "@oh-my-pi/pi-utils";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { buildGatedCall, type GatedCall, type RepoFacts, type ToolCallEventLike } from "./call.ts";
 import { createManualEngine, type CandidateInput, type DecisionEngine, type EngineEvidence, type EngineVerdict } from "./decide.ts";
@@ -54,7 +54,6 @@ import {
   isUncertainAction,
   parseThreshold,
   type JevAutoModeSettings,
-  type SettingsScope,
 } from "./settings.ts";
 import {
   buildConfirmationDialog,
@@ -99,7 +98,6 @@ export interface GateContext {
   readonly sessionManager: { getBranch?: () => readonly unknown[]; getEntries?: () => readonly unknown[] };
   readonly ui: GateUi;
   readonly signal?: AbortSignal;
-  isProjectTrusted?(): boolean;
 }
 
 export interface DecisionDeps {
@@ -111,7 +109,6 @@ export interface DecisionDeps {
 export interface GateState {
   settings: JevAutoModeSettings;
   policyNotes: string;
-  scope: SettingsScope;
 }
 
 export interface BlockResult {
@@ -120,7 +117,7 @@ export interface BlockResult {
 }
 
 export function createInitialState(): GateState {
-  return { settings: DEFAULT_SETTINGS, policyNotes: "", scope: "global" };
+  return { settings: DEFAULT_SETTINGS, policyNotes: "" };
 }
 
 function conversationBranch(ctx: GateContext): readonly unknown[] {
@@ -351,9 +348,6 @@ export async function evaluateToolCall(
     }
 
     case "uncertain": {
-      // The middle band is a policy decision, not a prompt by default. An auto mode
-      // that stops to ask the user has handed the decision back to the human, and
-      // the agent can always ask in conversation if it needs guidance.
       if (state.settings.uncertain === "deny") {
         const rationale = `No condition decided the call, and the uncertain band is resolved to a block. ${verdict.rationale}`;
         return blocked(deps, {
@@ -391,7 +385,6 @@ export async function evaluateToolCall(
         ...(call.command === undefined ? {} : { command: call.command }),
         ...(call.path === undefined ? {} : { path: call.path }),
         reasons,
-        rationale: verdict.rationale,
       });
 
       const choice = await ctx.ui.select(dialog, ["No", "Yes"]);
@@ -429,7 +422,7 @@ async function editThreshold(
   ctx: { ui: GateUi },
   state: GateState,
   observed: ReadonlyMap<string, ObservedCondition>,
-  save: (ctx: GateContext) => Promise<void>,
+  save: () => Promise<void>,
   rebuild: () => Promise<void>,
 ): Promise<void> {
   const choices = DEFAULT_RULES.map((rule) => {
@@ -455,7 +448,7 @@ async function editThreshold(
   }
 
   state.settings = { ...state.settings, thresholds: { ...state.settings.thresholds, [ruleId]: threshold } };
-  await save(ctx as unknown as GateContext);
+  await save();
   await rebuild();
   ctx.ui.notify(`\`${ruleId}\` now requires p >= ${threshold}`, "info");
 }
@@ -506,7 +499,7 @@ export function createEngine(
 
 export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void {
   const store =
-    options.store ?? new JevAutoModeStore({ agentDir: getAgentDir(), configDirName: CONFIG_DIR_NAME });
+    options.store ?? new JevAutoModeStore({ agentDir: getAgentDir() });
   const state = createInitialState();
   const observed = new Map<string, ObservedCondition>();
   const now = options.now ?? (() => Date.now());
@@ -542,23 +535,21 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
   const refresh = async (ctx: GateContext, applyFlag: boolean): Promise<void> => {
     // OMP's isProjectTrusted() currently always returns true, even in unknown
     // checkouts. Never let a repository-owned config weaken this global gate.
-    const loadedSettings = await store.loadSettings(ctx.cwd, false);
-    state.settings = loadedSettings.settings;
-    state.scope = loadedSettings.scope;
+    state.settings = await store.loadSettings();
     state.policyNotes = await store.loadPolicyNotes();
     if (applyFlag && pi.getFlag(AUTO_MODE_FLAG) === true) {
       state.settings = { ...state.settings, enabled: true };
     }
     await rebuildEngine();
     loaded = true;
-    updateStatus(ctx, { enabled: state.settings.enabled, engineId: deps.engine.id, scope: state.scope });
+    updateStatus(ctx, { enabled: state.settings.enabled, engineId: deps.engine.id });
     if (state.settings.enabled && deps.engine.id === MANUAL_ENGINE_ID) {
       ctx.ui.notify(NO_ENGINE_MESSAGE, "warning");
     }
   };
 
-  const save = async (ctx: GateContext): Promise<void> => {
-    await store.saveSettings(state.settings, "global", ctx.cwd);
+  const save = async (): Promise<void> => {
+    await store.saveSettings(state.settings);
   };
 
   pi.registerFlag(AUTO_MODE_FLAG, {
@@ -605,10 +596,9 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
         statusText({
           enabled: state.settings.enabled,
           engineId: deps.engine.id,
-          scope: state.scope,
         }),
         "",
-        describeSettings(state.settings, state.scope),
+        describeSettings(state.settings),
         availability.available
           ? `semantic layer: ${availability.model} (key from ${describeKeySource(availability.source)})`
           : `semantic layer: unavailable (${availability.reason ?? "unknown reason"})`,
@@ -621,11 +611,10 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
 
       if (value === "on" || value === "off") {
         state.settings = { ...state.settings, enabled: value === "on" };
-        await save(gateContext);
+        await save();
         updateStatus(gateContext, {
           enabled: state.settings.enabled,
           engineId: deps.engine.id,
-          scope: state.scope,
         });
         ctx.ui.notify(`Jev auto mode ${value === "on" ? "enabled" : "disabled"}.`, "info");
         return;
@@ -686,7 +675,6 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
         updateStatus(gateContext, {
           enabled: state.settings.enabled,
           engineId: deps.engine.id,
-          scope: state.scope,
         });
         ctx.ui.notify(
           `API key verified and stored at ${store.credentialPath()} (mode 600).\n\nSemantic layer: ${availability.model} (key from ${describeKeySource(availability.source)})`,
@@ -714,7 +702,6 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
         updateStatus(gateContext, {
           enabled: state.settings.enabled,
           engineId: deps.engine.id,
-          scope: state.scope,
         });
         ctx.ui.notify(
           availability.available
@@ -746,7 +733,7 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
         }
 
         state.settings = { ...state.settings, gateScope: argument };
-        await save(gateContext);
+        await save();
         ctx.ui.notify(`gate scope now: ${argument}\n\n${GATE_SCOPE_EXPLANATION}`, "info");
         return;
       }
@@ -764,7 +751,7 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
         }
 
         state.settings = { ...state.settings, uncertain: argument };
-        await save(gateContext);
+        await save();
         ctx.ui.notify(`uncertain band now resolves to: ${argument}\n\n${UNCERTAIN_EXPLANATION}`, "info");
         return;
       }
@@ -787,7 +774,7 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
             for (const key of Object.keys(thresholds)) delete thresholds[key];
           }
           state.settings = { ...state.settings, thresholds };
-          await save(gateContext);
+          await save();
           await rebuildEngine();
           ctx.ui.notify(
             `Threshold overrides cleared${target && target !== "reset" ? ` for \`${target}\`` : ""}.\n\n${formatRuleTable(DEFAULT_RULES, state.settings.thresholds, observed)}`,
@@ -817,7 +804,7 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
           ...state.settings,
           thresholds: { ...state.settings.thresholds, [ruleId]: threshold },
         };
-        await save(gateContext);
+        await save();
         await rebuildEngine();
         ctx.ui.notify(
           `\`${ruleId}\` now requires p >= ${formatThreshold(threshold)} (rejecting at p <= ${formatThreshold(1 - threshold)}).\n\n${formatRuleTable(DEFAULT_RULES, state.settings.thresholds, observed)}`,
@@ -856,9 +843,7 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
 
 function toGateContext(ctx: ExtensionContext): GateContext {
   // OMP's context differs from the upstream Pi context. Keep optional fields optional.
-  const source = ctx as unknown as Partial<GateContext> & {
-    isProjectTrusted?: () => boolean;
-  };
+  const source = ctx as unknown as Partial<GateContext>;
   return {
     cwd: ctx.cwd,
     hasUI: ctx.hasUI,
@@ -866,7 +851,6 @@ function toGateContext(ctx: ExtensionContext): GateContext {
     sessionManager: source.sessionManager ?? {},
     ui: ctx.ui as unknown as GateUi,
     signal: source.signal,
-    isProjectTrusted: () => source.isProjectTrusted?.() ?? false,
   };
 }
 

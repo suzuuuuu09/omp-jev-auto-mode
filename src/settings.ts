@@ -1,10 +1,8 @@
 /**
  * Settings, policy notes, and the stored API key.
  *
- * Global settings live next to the rest of the Pi agent state
- * (`$PI_CODING_AGENT_DIR` or `~/.pi/agent`). A project can override them from
- * `<cwd>/<CONFIG_DIR_NAME>/jev-auto-mode.json`, but only for a trusted project:
- * an untrusted checkout must not be able to loosen the gate that is judging it.
+ * Settings are global-only and live next to the OMP agent state.
+ * Project-local files must not be able to loosen this gate.
  *
  * The API key is not a setting. It goes to `<agentDir>/secrets/` as a `0600` file,
  * which is where Pi keeps its own credentials, so that it is neither committed with
@@ -28,7 +26,7 @@ export interface JevAutoModeSettings {
   readonly extraProtectedPaths: readonly string[];
   /** Shared state + questions budget guard, in characters. */
   readonly maxStateCharacters: number;
-  /** What a middle-band judgment means. Default `allow`: no user confirmation. */
+  /** What a middle-band judgment means. Default `ask`: user confirmation. */
   readonly uncertain: UncertainAction;
   /**
    * Which calls reach the semantic layer.
@@ -45,26 +43,7 @@ export interface JevAutoModeSettings {
    * visible in `/jev-auto-mode threshold` instead of silently resetting the rule.
    */
   readonly thresholds: Readonly<Record<string, number>>;
-  /**
-   * How decision records are drawn in the transcript.
-   *
-   * `compact` (the default) folds an approval into one line and a block into two, so
-   * a long session is not dominated by gate records. `full` shows the heading, the
-   * engine line, the command, the reasons, and the rationale. The expanded view (the tool
-   * expansion key) always shows every detail, whichever mode is set.
-   */
-  readonly display: DisplayMode;
 }
-
-export type DisplayMode = "full" | "compact";
-
-export const DISPLAY_MODES: readonly DisplayMode[] = ["full", "compact"];
-
-export function isDisplayMode(value: unknown): value is DisplayMode {
-  return typeof value === "string" && DISPLAY_MODES.includes(value as DisplayMode);
-}
-
-export type SettingsScope = "global" | "project";
 
 /**
  * How a judgment that lands in the middle band is resolved.
@@ -106,7 +85,6 @@ export const DEFAULT_SETTINGS: JevAutoModeSettings = {
   uncertain: "ask",
   gateScope: "all",
   thresholds: {},
-  display: "compact",
 };
 
 const MAX_PATTERN_ENTRIES = 200;
@@ -127,10 +105,8 @@ export const MIN_THRESHOLD = 0.5;
 export const MAX_THRESHOLD = 1;
 
 export interface StoreOptions {
-  /** Usually `~/.pi/agent`, honoring `PI_CODING_AGENT_DIR`. */
+  /** The OMP agent state directory. */
   readonly agentDir: string;
-  /** Usually `.pi` (`CONFIG_DIR_NAME`). */
-  readonly configDirName: string;
 }
 
 export type SettingsPatch = { -readonly [K in keyof JevAutoModeSettings]?: JevAutoModeSettings[K] };
@@ -182,9 +158,7 @@ function readStringArray(value: unknown): readonly string[] | undefined {
 /**
  * Validate an untrusted settings file.
  *
- * Malformed values are dropped rather than replaced by a default: a broken
- * project file must not be able to pin a value that overrides the global layer.
- * Unknown fields are ignored too.
+ * Malformed values and unknown fields are ignored.
  */
 export function parseSettingsPatch(value: unknown): SettingsPatch {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -210,10 +184,6 @@ export function parseSettingsPatch(value: unknown): SettingsPatch {
     patch.gateScope = record.gateScope;
   }
 
-  if (record.display !== undefined && isDisplayMode(record.display)) {
-    patch.display = record.display;
-  }
-
   const safeCommands = record.safeCommands === undefined ? undefined : readStringArray(record.safeCommands);
   if (safeCommands !== undefined) patch.safeCommands = safeCommands;
 
@@ -234,16 +204,6 @@ export function parseSettingsPatch(value: unknown): SettingsPatch {
   return patch;
 }
 
-export function mergeSettings(base: JevAutoModeSettings, patch: SettingsPatch): JevAutoModeSettings {
-  const merged = { ...base, ...patch };
-  // Thresholds merge per rule: a project file that retunes one condition must not
-  // wipe the global overrides for the others.
-  if (patch.thresholds !== undefined) {
-    merged.thresholds = { ...base.thresholds, ...patch.thresholds };
-  }
-  return merged;
-}
-
 async function readJsonFile(path: string): Promise<unknown> {
   try {
     return JSON.parse(await readFile(path, "utf8"));
@@ -261,43 +221,26 @@ async function writeFileAtomic(path: string, contents: string): Promise<void> {
 
 export class JevAutoModeStore {
   private readonly agentDir: string;
-  private readonly configDirName: string;
 
   constructor(options: StoreOptions) {
     this.agentDir = options.agentDir;
-    this.configDirName = options.configDirName;
   }
 
   globalSettingsPath(): string {
     return join(this.agentDir, "jev-auto-mode.json");
   }
 
-  projectSettingsPath(cwd: string): string {
-    return join(cwd, this.configDirName, "jev-auto-mode.json");
-  }
-
   policyNotesPath(): string {
     return join(this.agentDir, "jev-auto-mode-policy.md");
   }
 
-  /** Global settings with the project override layered on top, when trusted. */
-  async loadSettings(cwd: string, projectTrusted: boolean): Promise<{ settings: JevAutoModeSettings; scope: SettingsScope }> {
-    const globalPatch = parseSettingsPatch(await readJsonFile(this.globalSettingsPath()));
-    if (!projectTrusted) {
-      return { settings: mergeSettings(DEFAULT_SETTINGS, globalPatch), scope: "global" };
-    }
-    const projectValue = await readJsonFile(this.projectSettingsPath(cwd));
-    const hasProjectSettings = projectValue !== undefined;
-    const projectPatch = parseSettingsPatch(projectValue);
-    return {
-      settings: mergeSettings(mergeSettings(DEFAULT_SETTINGS, globalPatch), projectPatch),
-      scope: hasProjectSettings ? "project" : "global",
-    };
+  async loadSettings(): Promise<JevAutoModeSettings> {
+    const patch = parseSettingsPatch(await readJsonFile(this.globalSettingsPath()));
+    return { ...DEFAULT_SETTINGS, ...patch };
   }
 
-  async saveSettings(settings: JevAutoModeSettings, scope: SettingsScope, cwd: string): Promise<void> {
-    const path = scope === "project" ? this.projectSettingsPath(cwd) : this.globalSettingsPath();
-    await writeFileAtomic(path, `${JSON.stringify(settings, null, 2)}\n`);
+  async saveSettings(settings: JevAutoModeSettings): Promise<void> {
+    await writeFileAtomic(this.globalSettingsPath(), `${JSON.stringify(settings, null, 2)}\n`);
   }
 
   /** User-authored policy notes. Advisory input to Jev, never a hard rule. */
