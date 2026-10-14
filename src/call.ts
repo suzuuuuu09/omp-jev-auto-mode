@@ -24,7 +24,7 @@ export interface GatedCall {
   readonly tool: GatedTool;
   /** One-line description used in records and dialogs. */
   readonly summary: string;
-  /** bash: the command, truncated and redacted. Absent for file tools. */
+  /** bash: the complete command, with obvious secrets redacted. */
   readonly command?: string;
   /** write/edit: absolute target path. */
   readonly path?: string;
@@ -40,12 +40,9 @@ export interface GatedCall {
 
 export interface CallOptions {
   readonly cwd: string;
-  readonly maxCommandLength?: number;
   /** Additional protected locations from settings. */
   readonly extraProtectedPaths?: readonly string[];
 }
-
-export const DEFAULT_MAX_COMMAND_LENGTH = 4000;
 
 const SECRET_PATTERNS: readonly { readonly pattern: RegExp; readonly replacement: string }[] = [
   {
@@ -88,11 +85,9 @@ function asString(value: unknown): string | undefined {
  * Returns `undefined` for tools this extension does not gate.
  */
 export function buildGatedCall(event: ToolCallEventLike, options: CallOptions): GatedCall | undefined {
-  const maxCommandLength = options.maxCommandLength ?? DEFAULT_MAX_COMMAND_LENGTH;
-
   if (event.toolName === "bash") {
     const rawCommand = asString(event.input.command) ?? "";
-    const command = truncate(redactSecrets(rawCommand), maxCommandLength);
+    const command = redactSecrets(rawCommand);
     const firstLine = rawCommand.split("\n")[0] ?? rawCommand;
     return {
       tool: "bash",
@@ -155,7 +150,7 @@ export function toJevState(input: JevStateInput): JevState {
     tool: call.tool,
     operation: call.summary,
     matched_policy_reasons: [...input.reasons],
-    user_intent: input.intent.trim() || NO_INTENT_PLACEHOLDER,
+    user_intent: redactSecrets(input.intent.trim()) || NO_INTENT_PLACEHOLDER,
   };
 
   if (call.command !== undefined) value.command = call.command;
@@ -168,7 +163,7 @@ export function toJevState(input: JevStateInput): JevState {
   if (call.contentLength !== undefined) value.content_length = call.contentLength;
 
   const context: Record<string, JevJson> = {
-    policy: input.policy.trim() || NO_POLICY_PLACEHOLDER,
+    policy: redactSecrets(input.policy.trim()) || NO_POLICY_PLACEHOLDER,
     repository: {
       cwd: input.repo.cwd,
       is_git_repository: input.repo.isGitRepository,

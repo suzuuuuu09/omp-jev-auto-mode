@@ -22,7 +22,7 @@ test("OMP extension files are protected", () => {
 });
 
 test("read-only command chains use the fast path", () => {
-  assert.equal(isReadOnlyCommandChain("git status && rg foo src"), true);
+  assert.equal(isReadOnlyCommandChain("git status && ls src"), true);
   assert.equal(isReadOnlyCommandChain("git status && rm -rf build"), false);
 });
 
@@ -55,5 +55,19 @@ test("untrusted project overrides cannot turn off the global guard", async () =>
     assert.equal(result.scope, "global");
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("commands that can write or execute code require judgment", () => {
+  for (const command of [
+    "sort -o /tmp/result.txt input.txt",
+    "git diff --output=/tmp/result.patch",
+    "find . -exec touch /tmp/x +",
+    "rg --pre=sh pattern input.txt",
+    "xxd -r input.hex /tmp/result.bin",
+    "lsfoo",
+  ]) {
+    assert.equal(isReadOnlyCommandChain(command), false, command);
   }
 });

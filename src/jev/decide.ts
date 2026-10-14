@@ -147,13 +147,6 @@ export function combine(rules: readonly JevRule[], observations: readonly Observ
         clearedByIntent: [],
       };
     }
-    return {
-      verdict: "allow",
-      rationale: `The user's request covers this call, clearing ${describe(rules, first)}.`,
-      probabilities,
-      decidingRule: first.ruleId,
-      clearedByIntent: soft.map((observation) => observation.ruleId),
-    };
   }
 
   const uncertain = observations.filter((observation) => observation.effective === "uncertain");
@@ -165,7 +158,18 @@ export function combine(rules: readonly JevRule[], observations: readonly Observ
       rationale: `${rule?.uncertainMessage ?? "A safety condition could not be decided."} ${describe(rules, firstUncertain)}`,
       probabilities,
       decidingRule: firstUncertain.ruleId,
-      clearedByIntent: [],
+      clearedByIntent: soft.map((observation) => observation.ruleId),
+    };
+  }
+
+  if (soft.length > 0) {
+    const first = soft[0] as Observation;
+    return {
+      verdict: "allow",
+      rationale: `The user's request covers this call, clearing ${describe(rules, first)}.`,
+      probabilities,
+      decidingRule: first.ruleId,
+      clearedByIntent: soft.map((observation) => observation.ruleId),
     };
   }
 
