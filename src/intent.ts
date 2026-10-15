@@ -26,7 +26,10 @@ export const DEFAULT_INTENT_OPTIONS: IntentOptions = {
 export const NO_INTENT_TEXT = "";
 
 function truncate(value: string, maxLength: number): string {
-  return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+  if (value.length <= maxLength) return value;
+
+  const suffix = maxLength > 3 ? "..." : "";
+  return value.slice(0, maxLength - suffix.length) + suffix;
 }
 
 /** Flatten a Pi message content value into plain text. */
@@ -53,6 +56,7 @@ export function extractRecentIntent(
   options: IntentOptions = DEFAULT_INTENT_OPTIONS,
 ): string {
   const collected: string[] = [];
+  let totalChars = 0;
 
   for (let index = branch.length - 1; index >= 0 && collected.length < options.maxMessages; index -= 1) {
     const entry = branch[index];
@@ -64,8 +68,16 @@ export function extractRecentIntent(
     if (typeof message.customType === "string" && message.customType.length > 0) continue;
 
     const text = truncate(messageText(message.content), options.maxMessageChars);
-    if (text) collected.push(text);
+    if (!text) continue;
+
+    const separatorChars = collected.length > 0 ? 2 : 0;
+    const remaining = options.maxTotalChars - totalChars - separatorChars;
+    if (remaining <= 0) break;
+
+    const retained = truncate(text, remaining);
+    collected.push(retained);
+    totalChars += separatorChars + retained.length;
   }
 
-  return truncate(collected.reverse().join("\n\n"), options.maxTotalChars);
+  return collected.reverse().join("\n\n");
 }
