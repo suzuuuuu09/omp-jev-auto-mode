@@ -85,7 +85,7 @@ export const DEFAULT_RULES: readonly JevRule[] = [
     denyMessage: "The call is not part of what the user asked for.",
     uncertainMessage: "It is not clear whether the user's request covers this call.",
     mode: "required",
-    severity: "hazard",
+    severity: "confirmation",
     // Measured: 0.77-0.98 when the user asked, 0.06-0.15 when they did not. The bar
     // sits inside that empty band, not on top of the "asked" cluster, so it does not
     // decide by margin.

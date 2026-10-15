@@ -20,7 +20,7 @@ test("user consent clears soft rejections only when other conditions permit", ()
   for (const [intent, fetchedCode, expected] of [
     [1, 1, "allow"],
     [1, 0, "deny"],
-    [0, 1, "deny"],
+    [0, 1, "uncertain"],
   ] as const) {
     const answers = { intent_coverage: intent, local_scope: 0, no_fetched_code_execution: fetchedCode };
     assert.equal(combine(rules, observe(rules, answers)).verdict, expected);
@@ -57,10 +57,11 @@ test("unrecoverable loss requires confirmation despite clear intent", () => {
   assert.deepEqual(decision.clearedByIntent, ["no_outward_effect"]);
 });
 
-test("hazard rejections and out-of-request actions outrank confirmation", () => {
-  for (const hazard of ["intent_coverage", "no_secret_egress", "policy_compliance", "prompt_injection_absent", "no_fetched_code_execution"]) {
+test("hazard rejections outrank intent and loss confirmations", () => {
+  for (const hazard of ["no_secret_egress", "policy_compliance", "prompt_injection_absent", "no_fetched_code_execution"]) {
     const answers = Object.fromEntries(DEFAULT_RULES.map((rule) => [rule.id, 1]));
     answers.no_irreversible_damage = 0;
+    answers.intent_coverage = 0;
     answers[hazard] = 0;
     const decision = combine(DEFAULT_RULES, observe(DEFAULT_RULES, answers));
 
@@ -70,11 +71,12 @@ test("hazard rejections and out-of-request actions outrank confirmation", () => 
   }
 });
 
-test("intent thresholds distinguish rejection, confirmation and approval", () => {
+test("rejected and uncertain intent require confirmation without changing thresholds", () => {
   const rules = DEFAULT_RULES.filter((rule) => ["intent_coverage", "no_outward_effect"].includes(rule.id));
-  for (const [intent, expected] of [[0.4, "deny"], [0.5, "uncertain"], [0.6, "allow"]] as const) {
+  for (const [intent, expected] of [[0.4, "uncertain"], [0.5, "uncertain"], [0.6, "allow"]] as const) {
     const decision = combine(rules, observe(rules, { intent_coverage: intent, no_outward_effect: 0.1 }));
     assert.equal(decision.verdict, expected);
+    assert.equal(decision.requiresConfirmation, intent < 0.6 ? true : undefined);
   }
 });
 
