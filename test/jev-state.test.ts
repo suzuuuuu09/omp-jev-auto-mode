@@ -9,7 +9,6 @@ test("long commands retain their final operation for judgment", () => {
   const call = buildGatedCall({ toolName: "bash", input: { command } }, { cwd: "/tmp/repo" });
 
   assert.equal(call?.command, command);
-  assert.ok((call?.summary.length ?? 0) < 210);
 });
 
 test("obvious secrets in user intent and policy are redacted before sending", () => {

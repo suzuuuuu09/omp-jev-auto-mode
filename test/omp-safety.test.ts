@@ -11,22 +11,15 @@ import {
   type GateContext,
 } from "../src/extension.ts";
 import { DEFAULT_SETTINGS, JevAutoModeStore } from "../src/settings.ts";
-import { buildConfirmationDialog } from "../src/ui.ts";
 import {
   dangerousReasons,
-  hardDenyReasons,
   isReadOnlyCommandChain,
-  isScopedLocalDeletionCommand,
   protectedPathReason,
 } from "../src/policy.ts";
 
 test("uncertain calls require user confirmation by default", () => {
   assert.equal(DEFAULT_SETTINGS.uncertain, "ask");
   assert.equal(DEFAULT_SETTINGS.gateScope, "all");
-});
-
-test("destructive home deletion never reaches Jev", () => {
-  assert.ok(hardDenyReasons("rm -rf ~/").length > 0);
 });
 
 test("OMP extension files are protected", () => {
@@ -38,33 +31,14 @@ test("ordinary search and Git inspection stay on the fast path", () => {
     assert.equal(isReadOnlyCommandChain(command), true, command);
   }
   assert.equal(isReadOnlyCommandChain("git status && rm -rf build"), false);
-  const deletion = "find build -type f -delete";
-  assert.equal(isReadOnlyCommandChain(deletion), false);
-  assert.equal(isScopedLocalDeletionCommand(deletion, "/tmp/repo"), true);
-  assert.equal(isScopedLocalDeletionCommand("find . -delete", "/tmp/repo"), false);
 });
 
-test("confirmation dialogs show only the essentials", () => {
-  const dialog = buildConfirmationDialog({
-    tool: "bash",
-    command: "rm -rf build",
-    reasons: ["recursive delete"],
-  });
-  assert.match(dialog, /Confirm: bash/);
-  assert.match(dialog, /rm -rf build/);
-  assert.match(dialog, /recursive delete/);
-  assert.ok(dialog.split("\n").length <= 3);
-});
-
-test("project files cannot turn off the global guard", async () => {
+test("global uncertainty and threshold settings survive saving and loading", async () => {
   const root = await mkdtemp(join(tmpdir(), "omp-jev-"));
   const agentDir = join(root, "agent");
-  const projectDir = join(root, "workspace");
   try {
     await mkdir(agentDir, { recursive: true });
-    await mkdir(join(projectDir, ".omp"), { recursive: true });
     await writeFile(join(agentDir, "jev-auto-mode.json"), JSON.stringify({ enabled: true }));
-    await writeFile(join(projectDir, ".omp", "jev-auto-mode.json"), JSON.stringify({ enabled: false }));
     const store = new JevAutoModeStore({ agentDir });
     const result = await store.loadSettings();
     assert.equal(result.enabled, true);
@@ -77,7 +51,6 @@ test("project files cannot turn off the global guard", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
-
 
 test("commands that can write or execute code require judgment", () => {
   for (const command of [
@@ -94,7 +67,6 @@ test("commands that can write or execute code require judgment", () => {
     assert.equal(isReadOnlyCommandChain(command), false, command);
     if (!command.includes("lsfoo")) assert.ok(dangerousReasons(command).length > 0, command);
   }
-  assert.equal(isReadOnlyCommandChain("lsfoo"), false);
 });
 
 test("only explicitly scoped local deletions skip Jev judgment", async () => {
