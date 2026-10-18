@@ -57,8 +57,7 @@ export interface ConfirmationParts {
 /** The dialog shown when a judgment is delegated to the user. */
 export function buildConfirmationDialog(parts: ConfirmationParts): string {
 	const command = parts.command ?? parts.path ?? parts.tool;
-	const reason = parts.reasons[0] ?? "Jev is uncertain";
-	return [`Confirm: ${parts.tool}`, command, `Reason: ${reason}`].join("\n");
+	return [`Confirm: ${parts.tool}`, command].join("\n");
 }
 
 export const USAGE_TEXT = [

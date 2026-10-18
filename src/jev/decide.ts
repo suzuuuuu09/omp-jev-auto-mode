@@ -137,24 +137,30 @@ export function combine(rules: readonly JevRule[], observations: readonly Observ
   );
 
   const soft = rejected.filter((observation) => severityOf(observation) === "soft");
-  const confirmation = rejected.find((observation) => severityOf(observation) === "confirmation");
+  const confirmations = rejected.filter((observation) => severityOf(observation) === "confirmation");
   const uncertainIntent = observations.find(
     (observation) => observation.ruleId === INTENT_RULE_ID && observation.verdict === "uncertain",
   );
   const firstUncertain = observations.find(
     (observation) => observation.effective === "uncertain" && observation.ruleId !== INTENT_RULE_ID,
   );
-  const needsConfirmation = confirmation ?? uncertainIntent;
+  const needsConfirmation = confirmations[0] ?? uncertainIntent;
   if (needsConfirmation) {
-    const rule = rules.find((candidate) => candidate.id === needsConfirmation.ruleId);
-    const message = confirmation ? rule?.denyMessage : rule?.uncertainMessage;
-    const uncertainRule = firstUncertain && rules.find((candidate) => candidate.id === firstUncertain.ruleId);
-    const independentReason = firstUncertain
-      ? ` ${uncertainRule?.uncertainMessage ?? "A safety condition could not be decided."} ${describe(rules, firstUncertain)}`
-      : "";
+    const pending = observations.filter((observation) =>
+      confirmations.includes(observation) || observation === uncertainIntent || observation.effective === "uncertain",
+    );
+    pending.sort((left, right) =>
+      Number(right.ruleId === "no_irreversible_damage") - Number(left.ruleId === "no_irreversible_damage"),
+    );
+    const reasons = pending.map((observation) => {
+      const rule = rules.find((candidate) => candidate.id === observation.ruleId);
+      const message = observation.verdict === "rejected" ? rule?.denyMessage : rule?.uncertainMessage;
+      return `${message ?? "A safety condition needs confirmation."} ${describe(rules, observation)}`;
+    });
+
     return {
       verdict: "uncertain",
-      rationale: `${message ?? "A safety condition needs confirmation."} ${describe(rules, needsConfirmation)}${independentReason}`,
+      rationale: reasons.join("\n"),
       probabilities,
       decidingRule: needsConfirmation.ruleId,
       clearedByIntent: intentSatisfied ? soft.map((observation) => observation.ruleId) : [],

@@ -15,7 +15,6 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { getAgentDir } from "@oh-my-pi/pi-utils";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { buildGatedCall, type GatedCall, type RepoFacts, type ToolCallEventLike } from "./call.ts";
 import { createManualEngine, type CandidateInput, type DecisionEngine, type EngineEvidence, type EngineVerdict } from "./decide.ts";
@@ -95,7 +94,7 @@ export interface GateUi {
 export interface GateContext {
   readonly cwd: string;
   readonly hasUI: boolean;
-  readonly mode?: string;
+  readonly mode?: ExtensionContext["mode"];
   readonly sessionManager: { getBranch?: () => readonly unknown[]; getEntries?: () => readonly unknown[] };
   readonly ui: GateUi;
   readonly signal?: AbortSignal;
@@ -396,17 +395,20 @@ export async function evaluateToolCall(
         reasons: [verdict.rationale, ...reasons],
       });
 
-      const choice = await ctx.ui.select(dialog, ["No", "Yes"]);
+      const choice = await ctx.ui.select(dialog, ["Yes", "No"]);
       if (choice !== "Yes") {
+        const rationale = choice === "No"
+          ? "Jev auto mode: 「実行しない」が選択されたため、実行していません。"
+          : "Jev auto mode: 確認が完了しなかったため、実行していません。";
         writeRecord(deps, {
           call,
           reasons,
           status: "cancelled",
           source: "user",
-          rationale: "The user declined the confirmation.",
+          rationale,
           evidence,
         });
-        return { block: true, reason: "Blocked by the user at the Jev auto mode confirmation." };
+        return { block: true, reason: rationale };
       }
 
       return permit(deps, {
@@ -508,7 +510,7 @@ export function createEngine(
 
 export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void {
   const store =
-    options.store ?? new JevAutoModeStore({ agentDir: getAgentDir() });
+    options.store ?? new JevAutoModeStore({ agentDir: pi.pi.getAgentDir() });
   const state = createInitialState();
   const observed = new Map<string, ObservedCondition>();
   const now = options.now ?? (() => Date.now());

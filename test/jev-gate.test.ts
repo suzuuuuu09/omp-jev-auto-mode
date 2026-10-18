@@ -8,23 +8,30 @@ import type { DecisionRecord } from "../src/records.ts";
 
 function fixture({
   probabilities = {}, choice = "Yes", hasUI = true,
+  intent = "Update the requested external item.",
 }: {
   probabilities?: Readonly<Record<string, number | undefined>>;
   choice?: string;
   hasUI?: boolean;
+  intent?: string;
 } = {}) {
   const records: DecisionRecord[] = [];
   const dialogs: string[] = [];
+  const choices: string[][] = [];
   const asked: string[][] = [];
   const context: GateContext = {
     cwd: "/tmp/omp-workspace",
     hasUI,
     sessionManager: {
-      getBranch: () => [{ type: "message", message: { role: "user", content: "Update the requested external item." } }],
+      getBranch: () => intent ? [{ type: "message", message: { role: "user", content: intent } }] : [],
     },
     ui: {
       notify: () => {},
-      select: async (dialog) => { dialogs.push(dialog); return choice; },
+      select: async (dialog, options) => {
+        choices.push(options);
+        dialogs.push(dialog);
+        return choice === "Yes" ? options[0] : choice === "No" ? options[1] : undefined;
+      },
       confirm: async () => false,
       input: async () => undefined,
       editor: async () => undefined,
@@ -52,7 +59,7 @@ function fixture({
     { engine, record: (record) => records.push(record), now: Date.now },
   );
 
-  return { state, evaluate, records, dialogs, asked };
+  return { state, evaluate, records, dialogs, asked, context, choices };
 }
 
 const EXTERNAL_COMMANDS = [
@@ -92,6 +99,8 @@ test("mandatory confirmations ignore uncertainty settings and require a positive
     assert.equal(f.dialogs.length, 1);
     assert.equal(f.records[0]?.requiresConfirmation, true);
     assert.equal(f.records[0]?.status, choice === "Yes" ? "confirmed" : "cancelled");
+    if (choice === "No") assert.match(result!.reason, /「実行しない」が選択/);
+    if (choice === "cancelled") assert.match(result!.reason, /確認が完了しなかった/);
 
     if ("no_irreversible_damage" in probabilities) {
       assert.equal(f.records[0]?.decidingRule, "no_irreversible_damage");
@@ -107,6 +116,26 @@ test("mandatory confirmation fails closed without UI", async () => {
   assert.equal((await f.evaluate(EXTERNAL_COMMANDS[0]!))?.block, true);
   assert.equal(f.records[0]?.source, "no-ui");
   assert.equal(f.dialogs.length, 0);
+});
+
+test("one Yes authorizes a proposed call without an explicit request and does not authorize its retry", async () => {
+  const f = fixture({ intent: "", probabilities: { intent_coverage: 0, local_scope: 0, no_outward_effect: 0 } });
+  const command = EXTERNAL_COMMANDS[0]!;
+
+  assert.equal(await f.evaluate(command), undefined);
+  assert.equal(f.records[0]?.status, "confirmed");
+  assert.equal(f.dialogs.length, 1);
+  assert.equal(f.asked.length, 1);
+
+  f.context.ui.select = async (dialog) => {
+    f.dialogs.push(dialog);
+    return "No";
+  };
+
+  assert.equal((await f.evaluate(command))?.block, true);
+  assert.equal(f.records[1]?.status, "cancelled");
+  assert.equal(f.dialogs.length, 2);
+  assert.equal(f.asked.length, 2);
 });
 
 test("hard-deny and hazard rejection never offer confirmation", async () => {
@@ -154,19 +183,8 @@ test("confirmation preserves the full multiline command and target while redacti
 
   assert.equal(await f.evaluate(command), undefined);
   assert.equal(f.dialogs.length, 1);
-  assert.ok(f.dialogs[0]?.includes(redacted));
-  assert.doesNotMatch(f.dialogs[0]!, /FAKE_SECRET_VALUE/);
-});
-
-test("Slack reads with rejected intent require confirmation for each call", async () => {
-  const command = "slackcli conversations read D0C9GTT3RRP";
-  const f = fixture({ probabilities: { intent_coverage: 0.25 } });
-
-  assert.equal(await f.evaluate(command), undefined);
-  assert.equal(await f.evaluate(command), undefined);
-  assert.equal(f.dialogs.length, 2);
-  assert.ok(f.dialogs.every((dialog) => dialog.includes(command)));
-  assert.ok(f.records.every((record) => record.status === "confirmed"));
+  assert.equal(f.dialogs[0], `Confirm: bash\n${redacted}`);
+  assert.deepEqual(f.choices, [["Yes", "No"]]);
 });
 
 test("eval remains blocked before semantic judgment or confirmation", async () => {
