@@ -104,6 +104,7 @@ export interface DecisionDeps {
   readonly engine: DecisionEngine;
   readonly record: DecisionRecorder;
   readonly now: () => number;
+  readonly setConfirmationActive?: (active: boolean) => void;
 }
 
 export interface GateState {
@@ -395,7 +396,14 @@ export async function evaluateToolCall(
         reasons: [verdict.rationale, ...reasons],
       });
 
-      const choice = await ctx.ui.select(dialog, ["Yes", "No"]);
+      let choice: string | undefined;
+      deps.setConfirmationActive?.(true);
+      try {
+        choice = await ctx.ui.select(dialog, ["Yes", "No"]);
+      } finally {
+        deps.setConfirmationActive?.(false);
+      }
+
       if (choice !== "Yes") {
         const rationale = choice === "No"
           ? "Jev auto mode: 「実行しない」が選択されたため、実行していません。"
@@ -532,6 +540,9 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
     engine: createEngine(state.settings, engineOptions),
     record: options.record ?? createRecorder(pi),
     now,
+    setConfirmationActive: (active) => pi.events.emit("herdr:blocked", active
+      ? { active, label: "Jev: コマンド実行の確認待ち" }
+      : { active }),
   };
   let availability: JevAvailability = describeJevAvailability(options.env ?? process.env);
   let loaded = false;

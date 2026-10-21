@@ -67,6 +67,66 @@ const EXTERNAL_COMMANDS = [
   "npx composio execute GOOGLECALENDAR_PATCH_EVENT --event-id demo",
 ];
 
+test("Herdr is notified only while a Jev execution confirmation is open", async () => {
+  for (const outcome of ["Yes", "No", "cancelled", "error", "no-ui", "allow", "deny"] as const) {
+    type Handler = (event: { toolName: string; input: object }, ctx: GateContext) => Promise<unknown>;
+    const handlers = new Map<string, Handler>();
+    const events: unknown[] = [];
+    const records: DecisionRecord[] = [];
+    const store = new JevAutoModeStore({ agentDir: "/unused" });
+    store.loadSettings = async () => ({ ...DEFAULT_SETTINGS, enabled: true });
+    store.loadPolicyNotes = async () => "";
+    store.readStoredApiKey = async () => undefined;
+    const pi = {
+      registerFlag: () => {},
+      registerCommand: () => {},
+      on: (name: string, handler: Handler) => handlers.set(name, handler),
+      events: { emit: (name: string, data: unknown) => events.push({ name, data }) },
+    } as unknown as Parameters<typeof register>[0];
+    register(pi, {
+      store,
+      record: (record) => records.push(record),
+      engine: {
+        id: "mock",
+        judge: async () => ({
+          verdict: outcome === "allow" || outcome === "deny" ? outcome : "uncertain",
+          rationale: "test",
+          requiresConfirmation: true,
+        }),
+      },
+    });
+
+    const started = {
+      name: "herdr:blocked",
+      data: { active: true, label: "Jev: コマンド実行の確認待ち" },
+    };
+    const f = fixture({ hasUI: outcome !== "no-ui" });
+    f.context.ui.select = async () => {
+      assert.deepEqual(events, [started]);
+      if (outcome === "error") throw new Error("dialog failed");
+      return outcome === "cancelled" ? undefined : outcome;
+    };
+    const result = handlers.get("tool_call")!(
+      { toolName: "bash", input: { command: EXTERNAL_COMMANDS[0]! } }, f.context,
+    );
+
+    if (outcome === "error") {
+      await assert.rejects(result, /dialog failed/);
+    } else {
+      assert.equal((await result as { block?: boolean } | undefined)?.block,
+        outcome === "Yes" || outcome === "allow" ? undefined : true);
+      assert.equal(records[0]?.status,
+        outcome === "Yes" ? "confirmed" : outcome === "allow" ? "allowed"
+          : outcome === "No" || outcome === "cancelled" ? "cancelled" : "blocked");
+    }
+
+    assert.deepEqual(events, ["no-ui", "allow", "deny"].includes(outcome) ? [] : [
+      started,
+      { name: "herdr:blocked", data: { active: false } },
+    ]);
+  }
+});
+
 test("external changes use intent for both ordinary and flagged CLIs", async () => {
   for (const [command, intent, status] of [
     [EXTERNAL_COMMANDS[0]!, 1, "allowed"],
