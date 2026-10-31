@@ -9,7 +9,7 @@
  * a project nor readable by other users on the machine.
  */
 
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 export interface JevAutoModeSettings {
@@ -213,8 +213,22 @@ async function readJsonFile(path: string): Promise<unknown> {
 }
 
 async function writeFileAtomic(path: string, contents: string): Promise<void> {
-  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
   await mkdir(dirname(path), { recursive: true });
+
+  // Resolve before replacement so saving preserves a linked dotfile.
+  try {
+    path = await realpath(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+
+    const entry = await lstat(path).catch((statError: NodeJS.ErrnoException) => {
+      if (statError.code !== "ENOENT") throw statError;
+      return undefined;
+    });
+    if (entry) throw error;
+  }
+
+  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(temporary, contents, "utf8");
   await rename(temporary, path);
 }
