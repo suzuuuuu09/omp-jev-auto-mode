@@ -489,10 +489,6 @@ const PROTECTED_FILE_PATTERNS: readonly RegExp[] = [
   /^id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?$/i,
   /\.(?:pem|key|p12|pfx)$/i,
   /^\.(?:zshrc|bashrc|bash_profile|profile|zprofile|zlogin)$/i,
-  // Agent instruction files are a prompt-injection surface: a write there can
-  // change what the agent believes it has been told.
-  /^AGENTS\.md$/i,
-  /^CLAUDE\.md$/i,
 ];
 
 function normalizeForMatching(absolutePath: string): string {

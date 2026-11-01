@@ -59,13 +59,51 @@ function fixture({
     { engine, record: (record) => records.push(record), now: Date.now },
   );
 
-  return { state, evaluate, records, dialogs, asked, context, choices };
+  return { state, evaluate, records, dialogs, asked, context, choices, engine };
 }
 
 const EXTERNAL_COMMANDS = [
   "composio execute GOOGLECALENDAR_PATCH_EVENT --event-id demo",
   "npx composio execute GOOGLECALENDAR_PATCH_EVENT --event-id demo",
 ];
+
+test("instruction files use the ordinary edit path while other protected targets remain gated", async () => {
+  for (const toolName of ["write", "edit"]) {
+    for (const path of ["AGENTS.md", "docs/AGENTS.md", "CLAUDE.md", "docs/claude.md"]) {
+      const f = fixture({
+        intent: "今決めた開発ルールをプロジェクトの指示に反映して",
+        probabilities: { path_not_protected: 0.02 },
+      });
+      const result = await evaluateToolCall(
+        { toolName, input: { path, content: "Use the agreed development rules." } },
+        f.context, f.state,
+        { engine: f.engine, record: () => {}, now: Date.now },
+      );
+
+      assert.equal(result, undefined, `${toolName} ${path}`);
+      assert.equal(f.asked.length, 0);
+      assert.equal(f.dialogs.length, 0);
+    }
+
+    for (const path of [".env", ".ssh/id_ed25519", ".omp/AGENTS.md", "../AGENTS.md", "AGENTS.md"]) {
+      const f = fixture();
+      if (path === "AGENTS.md") {
+        f.state.settings = { ...f.state.settings, extraProtectedPaths: ["AGENTS.md"] };
+      }
+      let judgments = 0;
+      const result = await evaluateToolCall(
+        { toolName, input: { path, content: "test" } }, f.context, f.state,
+        { engine: { id: "test", judge: async () => {
+          judgments += 1;
+          return { verdict: "deny", rationale: "independent protection" };
+        } }, record: () => {}, now: Date.now },
+      );
+
+      assert.equal(judgments, 1, `${toolName} ${path}`);
+      assert.equal(result?.block, true, `${toolName} ${path}`);
+    }
+  }
+});
 
 test("Herdr is notified only while a Jev execution confirmation is open", async () => {
   for (const outcome of ["Yes", "No", "cancelled", "error", "no-ui", "allow", "deny"] as const) {
