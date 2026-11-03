@@ -35,6 +35,7 @@ import { extractRecentIntent } from "./intent.ts";
 import {
   dangerousReasons,
   evaluateUserCommandRules,
+  findRepositoryRoot,
   hardDenyReasons,
   isReadOnlyCommandChain,
   isScopedLocalDeletionCommand,
@@ -54,6 +55,7 @@ import {
   isUncertainAction,
   parseThreshold,
   type JevAutoModeSettings,
+  type SettingsPatch,
 } from "./settings.ts";
 import {
   buildConfirmationDialog,
@@ -441,7 +443,7 @@ async function editThreshold(
   ctx: { ui: GateUi },
   state: GateState,
   observed: ReadonlyMap<string, ObservedCondition>,
-  save: () => Promise<void>,
+  save: (update: (overrides: SettingsPatch) => SettingsPatch) => Promise<void>,
   rebuild: () => Promise<void>,
 ): Promise<void> {
   const choices = DEFAULT_RULES.map((rule) => {
@@ -466,8 +468,7 @@ async function editThreshold(
     return;
   }
 
-  state.settings = { ...state.settings, thresholds: { ...state.settings.thresholds, [ruleId]: threshold } };
-  await save();
+  await save((overrides) => ({ ...overrides, thresholds: { ...overrides.thresholds, [ruleId]: threshold } }));
   await rebuild();
   ctx.ui.notify(`\`${ruleId}\` now requires p >= ${threshold}`, "info");
 }
@@ -546,6 +547,7 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
   };
   let availability: JevAvailability = describeJevAvailability(options.env ?? process.env);
   let loaded = false;
+  let projectDir: string | undefined;
 
   /** Rebuild the engine from the settings and the currently resolvable key. */
   const rebuildEngine = async (): Promise<void> => {
@@ -555,9 +557,8 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
   };
 
   const refresh = async (ctx: GateContext, applyFlag: boolean): Promise<void> => {
-    // OMP's isProjectTrusted() currently always returns true, even in unknown
-    // checkouts. Never let a repository-owned config weaken this global gate.
-    state.settings = await store.loadSettings();
+    projectDir = findRepositoryRoot(ctx.cwd);
+    state.settings = await store.loadSettings(projectDir);
     state.policyNotes = await store.loadPolicyNotes();
     if (applyFlag && pi.getFlag(AUTO_MODE_FLAG) === true) {
       state.settings = { ...state.settings, enabled: true };
@@ -570,8 +571,10 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
     }
   };
 
-  const save = async (): Promise<void> => {
-    await store.saveSettings(state.settings);
+  const save = async (update: (overrides: SettingsPatch) => SettingsPatch): Promise<void> => {
+    const settings = await store.updateSettings(update, projectDir);
+    // Other settings must preserve the session's explicit on/off or startup flag.
+    state.settings = { ...settings, enabled: state.settings.enabled };
   };
 
   pi.registerFlag(AUTO_MODE_FLAG, {
@@ -603,7 +606,7 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
           if (!rule) return null;
           return [
             { value: `threshold ${rule.id}`, label: `current: ${rule.threshold}` },
-            { value: `threshold ${rule.id} reset`, label: "reset to the calibrated default" },
+            { value: `threshold ${rule.id} reset`, label: "この保存先の上書きを削除して継承" },
           ];
         }
       }
@@ -611,7 +614,7 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
     },
     handler: async (args, ctx) => {
       const gateContext = toGateContext(ctx);
-      if (!loaded) await refresh(gateContext, true);
+      if (!loaded || projectDir !== findRepositoryRoot(gateContext.cwd)) await refresh(gateContext, true);
 
       const value = String(args ?? "").trim();
       const status = [
@@ -632,8 +635,8 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
       }
 
       if (value === "on" || value === "off") {
+        await save((overrides) => ({ ...overrides, enabled: value === "on" }));
         state.settings = { ...state.settings, enabled: value === "on" };
-        await save();
         updateStatus(gateContext, {
           enabled: state.settings.enabled,
           engineId: deps.engine.id,
@@ -754,8 +757,7 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
           return;
         }
 
-        state.settings = { ...state.settings, gateScope: argument };
-        await save();
+        await save((overrides) => ({ ...overrides, gateScope: argument }));
         ctx.ui.notify(`gate scope now: ${argument}\n\n${GATE_SCOPE_EXPLANATION}`, "info");
         return;
       }
@@ -772,8 +774,7 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
           return;
         }
 
-        state.settings = { ...state.settings, uncertain: argument };
-        await save();
+        await save((overrides) => ({ ...overrides, uncertain: argument }));
         ctx.ui.notify(`uncertain band now resolves to: ${argument}\n\n${UNCERTAIN_EXPLANATION}`, "info");
         return;
       }
@@ -785,21 +786,20 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
 
         if (ruleId === "reset" || argument === "reset") {
           const target = ruleId === "reset" ? argument : ruleId;
-          const thresholds = { ...state.settings.thresholds };
           if (target && target !== "reset") {
             if (!ruleById(target)) {
               ctx.ui.notify(`Unknown rule \`${target}\`.\n\n${formatRuleTable(DEFAULT_RULES, state.settings.thresholds, observed)}`, "warning");
               return;
             }
-            delete thresholds[target];
-          } else {
-            for (const key of Object.keys(thresholds)) delete thresholds[key];
           }
-          state.settings = { ...state.settings, thresholds };
-          await save();
+          await save((overrides) => {
+            const thresholds = target && target !== "reset" ? { ...overrides.thresholds } : {};
+            if (target) delete thresholds[target];
+            return { ...overrides, thresholds };
+          });
           await rebuildEngine();
           ctx.ui.notify(
-            `Threshold overrides cleared${target && target !== "reset" ? ` for \`${target}\`` : ""}.\n\n${formatRuleTable(DEFAULT_RULES, state.settings.thresholds, observed)}`,
+            `この保存先の閾値の上書きを削除し、上位の設定（なければ標準値）を継承します。\n\n${formatRuleTable(DEFAULT_RULES, state.settings.thresholds, observed)}`,
             "info",
           );
           return;
@@ -822,11 +822,7 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
           return;
         }
 
-        state.settings = {
-          ...state.settings,
-          thresholds: { ...state.settings.thresholds, [ruleId]: threshold },
-        };
-        await save();
+        await save((overrides) => ({ ...overrides, thresholds: { ...overrides.thresholds, [ruleId]: threshold } }));
         await rebuildEngine();
         ctx.ui.notify(
           `\`${ruleId}\` now requires p >= ${formatThreshold(threshold)} (rejecting at p <= ${formatThreshold(1 - threshold)}).\n\n${formatRuleTable(DEFAULT_RULES, state.settings.thresholds, observed)}`,
@@ -845,7 +841,7 @@ export function register(pi: ExtensionAPI, options: RegisterOptions = {}): void 
 
   pi.on("tool_call", async (event, ctx) => {
     const gateContext = toGateContext(ctx);
-    if (!loaded) await refresh(gateContext, false);
+    if (!loaded || projectDir !== findRepositoryRoot(gateContext.cwd)) await refresh(gateContext, false);
 
     // Eval can run shell commands indirectly. Do not let it bypass the bash gate.
     // OMP's own tools.approval.eval = "deny" should also be set as defense in depth.

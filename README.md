@@ -11,7 +11,7 @@ An experimental Jev-powered tool-call guard for [Oh My Pi](https://github.com/ca
 - Jev evaluates user intent for every escalated call. Clear intent can permit recoverable external changes; unclear intent and detected unrecoverable loss require explicit confirmation. Independent unresolved safety conditions still obey `uncertain: deny`. Hard-deny and rejected hazard rules cannot be overridden. Unknown local commands may now need confirmation when intent is unclear.
 - Blocks the `eval` tool while the extension is enabled: eval can invoke shell commands outside the bash guard.
 - Protects `.omp` and `.herdr` paths in addition to upstream protected paths.
-- Ignores project-local Jev settings: OMP currently treats all projects as trusted, so allowing project overrides could disable the global gate.
+- Loads optional project settings from `<repo>/.omp/jev-auto-mode.json`. These settings override the user settings for that repository, including the ability to disable the gate; add this file only to repositories you trust. `/jev-auto-mode` saves to the project file when it exists and otherwise saves to the user settings file.
 - Confirmation dialogs show the complete redacted command with Yes/No choices; audit records stay in session metadata.
 - Ordinary read-only searches and Git inspection stay on the fast path. Write or execution options such as `find -exec`, `sort -o`, `rg --pre`, `xxd -r`, and Git diff output or helper options go through Jev. Explicit user safe-command patterns still take precedence.
 - Scoped local deletions have a separate target check; they are not classified as read-only.
@@ -30,7 +30,9 @@ bun run check
 omp --no-extensions -e (pwd)/index.ts
 ```
 
-Disable other copies of `pi-jev-auto-mode` or `jev-guard` to prevent duplicate handlers. Configure `TYPESAFE_API_KEY` in the environment or use `/jev-auto-mode login`. Login stores the key under your OMP agent directory, outside the repository, with owner-only file permissions.
+Disable other copies of `pi-jev-auto-mode` or `jev-guard` to prevent duplicate handlers. Configure `TYPESAFE_API_KEY` in the environment or use `/jev-auto-mode login`. Login stores the key under your OMP agent directory, outside the repository, with owner-only file permissions. Project settings use the same fields as the user settings JSON and may be partial; project values override user values.
+
+Settings commands update only the changed fields in their save location, preserving inheritance for omitted fields. `threshold reset` removes overrides at that location: project settings inherit user thresholds, then calibrated defaults. Project saves reject links pointing outside the repository and dangling links.
 
 For persistent loading, configure OMP's `extensions:` setting or symlink the checkout into `~/.omp/agent/extensions/`. Keep actual credentials out of Git and Nix store.
 

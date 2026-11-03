@@ -1,8 +1,8 @@
 /**
  * Settings, policy notes, and the stored API key.
  *
- * Settings are global-only and live next to the OMP agent state.
- * Project-local files must not be able to loosen this gate.
+ * User settings live next to the OMP agent state. A repository may provide an
+ * overriding `.omp/jev-auto-mode.json` for that project.
  *
  * The API key is not a setting. It goes to `<agentDir>/secrets/` as a `0600` file,
  * which is where Pi keeps its own credentials, so that it is neither committed with
@@ -10,7 +10,7 @@
  */
 
 import { chmod, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 export interface JevAutoModeSettings {
   readonly enabled: boolean;
@@ -212,7 +212,21 @@ async function readJsonFile(path: string): Promise<unknown> {
   }
 }
 
-async function writeFileAtomic(path: string, contents: string): Promise<void> {
+async function existingEntry(path: string) {
+  return lstat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+    return undefined;
+  });
+}
+
+function requireProjectPath(path: string, projectRoot: string): void {
+  const target = relative(projectRoot, path);
+  if (isAbsolute(target) || target === ".." || target.startsWith(`..${sep}`)) {
+    throw new Error("プロジェクト設定の保存先がリポジトリ外を指しています。");
+  }
+}
+
+async function writeFileAtomic(path: string, contents: string, projectDir?: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
 
   // Resolve before replacement so saving preserves a linked dotfile.
@@ -221,12 +235,11 @@ async function writeFileAtomic(path: string, contents: string): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 
-    const entry = await lstat(path).catch((statError: NodeJS.ErrnoException) => {
-      if (statError.code !== "ENOENT") throw statError;
-      return undefined;
-    });
+    const entry = await existingEntry(path);
     if (entry) throw error;
   }
+
+  if (projectDir) requireProjectPath(path, await realpath(projectDir));
 
   const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(temporary, contents, "utf8");
@@ -244,17 +257,52 @@ export class JevAutoModeStore {
     return join(this.agentDir, "jev-auto-mode.json");
   }
 
+  projectSettingsPath(projectDir: string): string {
+    return join(projectDir, ".omp", "jev-auto-mode.json");
+  }
+
   policyNotesPath(): string {
     return join(this.agentDir, "jev-auto-mode-policy.md");
   }
 
-  async loadSettings(): Promise<JevAutoModeSettings> {
-    const patch = parseSettingsPatch(await readJsonFile(this.globalSettingsPath()));
-    return { ...DEFAULT_SETTINGS, ...patch };
+  async loadSettings(projectDir?: string): Promise<JevAutoModeSettings> {
+    const globalPatch = parseSettingsPatch(await readJsonFile(this.globalSettingsPath()));
+    const projectPatch: SettingsPatch = projectDir
+      ? parseSettingsPatch(await readJsonFile(this.projectSettingsPath(projectDir)))
+      : {};
+    return {
+      ...DEFAULT_SETTINGS,
+      ...globalPatch,
+      ...projectPatch,
+      thresholds: { ...globalPatch.thresholds, ...projectPatch.thresholds },
+    };
   }
 
-  async saveSettings(settings: JevAutoModeSettings): Promise<void> {
-    await writeFileAtomic(this.globalSettingsPath(), `${JSON.stringify(settings, null, 2)}\n`);
+  async saveSettings(settings: JevAutoModeSettings, projectDir?: string): Promise<void> {
+    const target = await this.settingsWriteTarget(projectDir);
+    await writeFileAtomic(target.path, `${JSON.stringify(settings, null, 2)}\n`, target.projectDir);
+  }
+
+  async updateSettings(
+    update: (overrides: SettingsPatch) => SettingsPatch,
+    projectDir?: string,
+  ): Promise<JevAutoModeSettings> {
+    const target = await this.settingsWriteTarget(projectDir);
+    const overrides = parseSettingsPatch(await readJsonFile(target.path));
+    await writeFileAtomic(target.path, `${JSON.stringify(update(overrides), null, 2)}\n`, target.projectDir);
+    return this.loadSettings(projectDir);
+  }
+
+  private async settingsWriteTarget(projectDir?: string): Promise<{ path: string; projectDir?: string }> {
+    if (projectDir) {
+      const path = this.projectSettingsPath(projectDir);
+      const directory = dirname(path);
+      if ((await existingEntry(directory))?.isSymbolicLink()) {
+        requireProjectPath(await realpath(directory), await realpath(projectDir));
+      }
+      if (await existingEntry(path)) return { path, projectDir };
+    }
+    return { path: this.globalSettingsPath() };
   }
 
   /** User-authored policy notes. Advisory input to Jev, never a hard rule. */

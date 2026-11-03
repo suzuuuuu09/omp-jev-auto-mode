@@ -10,7 +10,8 @@
  * `@nilskluewer/pi-auto-permission-gate` extension; see README "Acknowledgements".
  */
 
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export interface CommandRuleConfig {
   /** Shell-style `*` / `?` patterns that auto-approve without asking Jev. */
@@ -495,6 +496,16 @@ function normalizeForMatching(absolutePath: string): string {
   return absolutePath.replace(/\\/g, "/");
 }
 
+export function findRepositoryRoot(cwd: string): string | undefined {
+  let directory = resolve(cwd);
+  while (true) {
+    if (existsSync(join(directory, ".git"))) return directory;
+    const parent = dirname(directory);
+    if (parent === directory) return undefined;
+    directory = parent;
+  }
+}
+
 /**
  * Classify a path against the protected locations.
  *
@@ -560,13 +571,33 @@ export function classifyWriteTarget(
   const outsideCwd = isAbsolute(relativeToCwd)
     ? true
     : relativeToCwd === ".." || relativeToCwd.startsWith(`..${sep}`) || relativeToCwd === "";
+  const repositoryRoot = findRepositoryRoot(projectRoot);
+  const projectSettingsPath = repositoryRoot
+    ? resolve(repositoryRoot, ".omp", "jev-auto-mode.json")
+    : undefined;
+  const isProjectSettingsFile =
+    repositoryRoot !== undefined &&
+    projectSettingsPath !== undefined &&
+    normalizeForMatching(absolute).toLowerCase() === normalizeForMatching(projectSettingsPath).toLowerCase() &&
+    !isSymlink(join(repositoryRoot, ".omp")) &&
+    !isSymlink(absolute);
+  const protectedReason = protectedPathReason(absolute, extraProtectedPaths);
 
   return {
     absolute,
     relativeToCwd: outsideCwd ? undefined : relativeToCwd,
     outsideCwd,
-    protectedReason: protectedPathReason(absolute, extraProtectedPaths),
+    protectedReason:
+      isProjectSettingsFile && protectedReason === "protected directory `.omp`" ? undefined : protectedReason,
   };
+}
+
+function isSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
 }
 
 export function unique<T>(values: readonly T[]): T[] {

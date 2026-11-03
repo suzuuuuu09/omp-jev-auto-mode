@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, rmdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -13,6 +13,7 @@ import {
 import { DEFAULT_SETTINGS, JevAutoModeStore } from "../src/settings.ts";
 import {
   dangerousReasons,
+  classifyWriteTarget,
   isReadOnlyCommandChain,
   protectedPathReason,
 } from "../src/policy.ts";
@@ -24,6 +25,29 @@ test("uncertain calls require user confirmation by default", () => {
 
 test("OMP extension files are protected", () => {
   assert.ok(protectedPathReason("/home/suzu/.omp/agent/extensions/test.ts"));
+});
+
+test("only the plain repository settings file bypasses built-in OMP path protection", async () => {
+  const root = await mkdtemp(join(tmpdir(), "omp-project-protection-"));
+  try {
+    await mkdir(join(root, ".git"));
+    await mkdir(join(root, ".omp"));
+    const path = join(root, ".omp", "jev-auto-mode.json");
+    assert.equal(classifyWriteTarget(path, root).protectedReason, undefined);
+    assert.ok(classifyWriteTarget(path, root, ["jev-auto-mode.json"]).protectedReason);
+    assert.ok(classifyWriteTarget(".omp/other.json", root).protectedReason);
+    assert.ok(classifyWriteTarget(join(root, "outside", ".omp", "jev-auto-mode.json"), root).protectedReason);
+
+    await symlink(join(root, "outside.json"), path);
+    assert.ok(classifyWriteTarget(path, root).protectedReason);
+    await rm(path);
+    await rmdir(join(root, ".omp"));
+    await mkdir(join(root, "config"));
+    await symlink(join(root, "config"), join(root, ".omp"));
+    assert.ok(classifyWriteTarget(path, root).protectedReason);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("ordinary search and Git inspection stay on the fast path", () => {
